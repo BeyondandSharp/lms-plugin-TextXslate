@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extension>
+	<name>Text::Xslate Format</name>
+	<defaultState>enabled</defaultState>
+	<module>Plugins::TextXslate::Plugin</module>
+	<version>0.1.0</version>
+	<description>Text::Xslate template formatting for Lyrion Music Server plugins</description>
+	<creator>MusicArtistInfo</creator>
+	<category>information</category>
+	<type>2</type>
+	<targetApplication>
+		<id>SqueezeCenter</id>
+		<maxVersion>*</maxVersion>
+		<minVersion>8.0</minVersion>
+	</targetApplication>
+</extension>
