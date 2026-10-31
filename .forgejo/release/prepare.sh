@@ -31,6 +31,7 @@ else
   mkdir -p "$DIST/TextXslate"
   tar --exclude=.git --exclude=.forgejo --exclude=dist -cf - . | tar -xf - -C "$DIST/TextXslate"
 fi
+rm -rf "$DIST/TextXslate/.forgejo" "$DIST/TextXslate/dist"
 
 rm -f "$ASSET_ZIP" "$ASSET_TAR"
 cd "$DIST" && zip -qr "$ASSET_ZIP" TextXslate
