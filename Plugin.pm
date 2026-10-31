@@ -21,7 +21,7 @@ our $VERSION;
 sub initPlugin {
 	my $class = shift;
 
-	$VERSION = $class->_pluginDataFor('version') || '0.1.0';
+	$VERSION = $class->_pluginDataFor('version') || '0.0.0';
 
 	Plugins::TextXslate::API->register;
 
