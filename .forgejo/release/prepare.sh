@@ -28,7 +28,7 @@ else
   mkdir -p "$DIST/TextXslate"
   tar --exclude=.git --exclude=.forgejo --exclude=dist -cf - . | tar -xf - -C "$DIST/TextXslate"
 fi
-rm -rf "$DIST/TextXslate/.forgejo" "$DIST/TextXslate/dist"
+rm -rf "$DIST/TextXslate/.forgejo" "$DIST/TextXslate/dist" "$DIST/TextXslate/t"
 
 if ! grep -q '<version>@VERSION@</version>' "$DIST/TextXslate/install.xml"; then
   echo "[ERROR] $DIST/TextXslate/install.xml 缺少 @VERSION@ 占位符" >&2
