@@ -32,6 +32,10 @@ sub handler {
 		require Plugins::PerlEditor::API;
 		Plugins::PerlEditor::API->available;
 	} ? 1 : 0;
+	$paramRef->{perlEditorScript} = eval {
+		require Plugins::PerlEditor::API;
+		Plugins::PerlEditor::API->editor_js;
+	} || 'plugins/PerlEditor/editor.js';
 
 	my $custom_file  = _custom_file();
 	my $default_file = _default_file();

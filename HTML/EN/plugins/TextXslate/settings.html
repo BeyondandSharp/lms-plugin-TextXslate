@@ -21,10 +21,13 @@
 </div>
 
 [% IF perlEditorAvailable %]
-<script src="[% webroot %]plugins/PerlEditor/editor.js"></script>
+<script src="[% webroot %][% perlEditorScript %]"></script>
 <script>
 (function () {
 	if (!window.LMSPerlEditor) return;
+	if (window.LMSPerlEditor.init) {
+		try { window.LMSPerlEditor.init(document, '#txFunctions'); return; } catch (e) {}
+	}
 	var area = document.getElementById('txFunctions');
 	if (area) {
 		try { window.LMSPerlEditor.attach(area); } catch (e) {}
