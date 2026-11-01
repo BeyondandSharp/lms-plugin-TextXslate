@@ -38,6 +38,12 @@
 <script src="[% webroot %]plugins/TextXslate/lib/prism/prism-perl.min.js"></script>
 <script>
 (function () {
+	// The stock Perl grammar treats assignments like '$s=' as substitution
+	// regexes and can swallow following lines.  Keep only the slash-delimited
+	// regex rule; it is enough for the function table and avoids false tokens.
+	if (window.Prism && Prism.languages.perl && Array.isArray(Prism.languages.perl.regex) && Prism.languages.perl.regex.length) {
+		Prism.languages.perl.regex = [Prism.languages.perl.regex[Prism.languages.perl.regex.length - 1]];
+	}
 	var area = document.getElementById('txFunctions');
 	if (!area || !window.CodeJar || !window.Prism || !Prism.languages.perl) {
 		return;
