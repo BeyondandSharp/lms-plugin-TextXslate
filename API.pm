@@ -5,8 +5,10 @@ use warnings;
 
 use Encode qw(FB_CROAK);
 use File::Basename ();
+use File::Spec::Functions qw(catfile);
 
 our $REGISTERED = 0;
+our $CURRENT_FIELDS;
 
 my %TAG_CACHE;
 
@@ -83,10 +85,6 @@ sub fields_for_track {
 	for my $method (qw(originalartist origartist)) {
 		next unless $track->can($method);
 		my $value = eval { $track->$method };
-		_set_field(\%fields, 'origartist', $value);
-	}
-	if ( !defined $fields{origartist} && $track->can('get_column') ) {
-		my $value = eval { $track->get_column('origartist') };
 		_set_field(\%fields, 'origartist', $value);
 	}
 
@@ -215,7 +213,24 @@ sub _truthy {
 	return 1;
 }
 
+sub _functions_file {
+	my $custom = eval { require Slim::Utils::Prefs; Slim::Utils::Prefs::dir() . '/textxslate_functions.pl' };
+	return $custom if defined $custom && $custom ne '' && -f $custom;
+	return catfile(File::Basename::dirname(__FILE__), 'functions.pl');
+}
+
 sub _functions {
+	my $fields = shift;
+	my $file = _functions_file();
+	if ( $file && -f $file ) {
+		local $CURRENT_FIELDS = $fields;
+		my $table = eval { do $file };
+		return $table if ref $table eq 'HASH';
+	}
+	return _builtin_functions($fields);
+}
+
+sub _builtin_functions {
 	my $fields = shift || {};
 	my %fields = %$fields;
 

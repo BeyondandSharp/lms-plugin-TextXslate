@@ -25,6 +25,11 @@ sub initPlugin {
 
 	Plugins::TextXslate::API->register;
 
+	if (main::WEBUI) {
+		require Plugins::TextXslate::Settings;
+		Plugins::TextXslate::Settings->new();
+	}
+
 	return 1;
 }
 

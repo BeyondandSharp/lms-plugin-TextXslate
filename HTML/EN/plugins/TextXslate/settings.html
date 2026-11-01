@@ -1,0 +1,69 @@
+[% PROCESS settings/header.html %]
+<link rel="stylesheet" href="[% webroot %]plugins/TextXslate/lib/prism/prism-tomorrow.min.css">
+<style>
+.tx-functions textarea.tx-code-input { display:block; width:100%; min-height:420px; box-sizing:border-box; font-family:monospace; font-size:13px; line-height:19px; }
+.tx-codejar-wrap { display:flex; border:1px solid #888; background:#1e1e1e; color:#d4d4d4; font-family:monospace; font-size:13px; line-height:19px; overflow:hidden; margin:4px 0; height:calc(30 * 19px + 12px); }
+.tx-codejar-gutter { flex:0 0 auto; align-self:stretch; height:100%; box-sizing:border-box; margin:0; padding:6px 8px; text-align:right; color:#858585; background:#252526; user-select:none; overflow:hidden; white-space:pre; font-family:monospace !important; font-size:13px !important; line-height:19px !important; }
+.tx-codejar { flex:1 1 auto; min-width:0; padding:6px 8px; font-family:monospace !important; font-size:13px !important; line-height:19px !important; white-space:pre !important; overflow-wrap:normal !important; word-break:normal !important; overflow:auto; outline:none; background:transparent; color:#d4d4d4; box-sizing:border-box; }
+.tx-codejar * { font-family:monospace !important; font-size:13px !important; line-height:19px !important; }
+.tx-hint { opacity:.75; font-size:90%; margin:6px 0 10px; }
+</style>
+
+<div class="settingsSection tx-functions">
+ <div class="settingGroup">
+  <h3>Text::Xslate function table</h3>
+  <div class="tx-hint">
+   Perl function table used by Text::Xslate templates.  Arguments are evaluated by Text::Xslate;
+   return a hash of function names to coderefs.  Changes take effect after restarting LMS.
+  </div>
+  <textarea name="functionsSource" id="txFunctions" rows="30" class="tx-code-input">[% functionsSource | html %]</textarea>
+ </div>
+</div>
+
+<script src="[% webroot %]plugins/TextXslate/lib/codejar.min.js"></script>
+<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-core.min.js"></script>
+<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-clike.min.js"></script>
+<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-perl.min.js"></script>
+<script>
+(function () {
+	var area = document.getElementById('txFunctions');
+	if (!area || !window.CodeJar || !window.Prism || !Prism.languages.perl) {
+		return;
+	}
+	var wrap = document.createElement('div');
+	wrap.className = 'tx-codejar-wrap';
+	var gutter = document.createElement('pre');
+	gutter.className = 'tx-codejar-gutter';
+	var editor = document.createElement('div');
+	editor.className = 'tx-codejar';
+	editor.setAttribute('role', 'textbox');
+	editor.setAttribute('aria-multiline', 'true');
+	wrap.appendChild(gutter);
+	wrap.appendChild(editor);
+	area.parentNode.insertBefore(wrap, area);
+	area.style.display = 'none';
+
+	var jar = new CodeJar(editor, function (el) {
+		el.innerHTML = Prism.highlight(el.textContent || '', Prism.languages.perl, 'perl');
+	}, { tab: '    ', spellcheck: false, addClosing: false });
+
+	function sync() {
+		area.value = jar.toString();
+		var count = (area.value || '').split('\n').length;
+		var nums = [];
+		for (var i = 1; i <= count; i++) nums.push(i);
+		gutter.textContent = nums.join('\n');
+	}
+	jar.onUpdate(sync);
+	jar.updateCode(area.value || '');
+	sync();
+	var form = area.form || area.closest('form');
+	if (form) form.addEventListener('submit', sync);
+	editor.addEventListener('input', sync);
+	editor.addEventListener('blur', sync);
+	editor.addEventListener('scroll', function () {
+		gutter.scrollTop = editor.scrollTop;
+	});
+})();
+</script>
+[% PROCESS settings/footer.html %]
