@@ -72,6 +72,27 @@ sub fields_for_track {
 		$fields{$key} = "$value" if defined $value && "$value" ne '';
 	}
 
+	# Convenience fields used by the default filename templates.
+	for my $key (qw(discnumber tracknumber)) {
+		next unless defined $fields{$key} && $fields{$key} =~ /^\s*(\d+)/;
+		my $number = $1;
+		$fields{$key . '_padded'} = $key eq 'discnumber'
+			? sprintf('%d', $number)
+			: sprintf('%02d', $number);
+	}
+	for my $method (qw(originalartist origartist)) {
+		next unless $track->can($method);
+		my $value = eval { $track->$method };
+		if ( defined $value && "$value" ne '' ) {
+			$fields{origartist} = "$value";
+			last;
+		}
+	}
+	if ( !defined $fields{origartist} && $track->can('get_column') ) {
+		my $value = eval { $track->get_column('origartist') };
+		$fields{origartist} = "$value" if defined $value && "$value" ne '';
+	}
+
 	my $url = eval { $track->url } || '';
 	$fields{url} = $url if $url ne '';
 
