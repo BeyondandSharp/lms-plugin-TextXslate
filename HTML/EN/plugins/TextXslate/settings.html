@@ -9,7 +9,9 @@
   <h3>Text::Xslate function table</h3>
   <div class="tx-hint">
    Perl function table used by Text::Xslate templates.  Arguments are evaluated by Text::Xslate;
-   return a hash of function names to coderefs.  Changes take effect after restarting LMS.
+   return a hash of function names to coderefs.  Custom functions use the <code>tx_</code> prefix
+   (for example <code>tx_num</code>, <code>tx_pad</code>, <code>tx_substr</code>) to avoid
+   collisions with Perl built-ins.  Changes take effect after restarting LMS.
   </div>
   <textarea name="functionsSource" id="txFunctions" rows="30" class="tx-code-input">[% functionsSource | html %]</textarea>
  </div>
