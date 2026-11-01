@@ -10,7 +10,7 @@ use Slim::Utils::Prefs;
 use Encode qw(FB_CROAK);
 
 sub name {
-	return 'Text::Xslate Format';
+	return 'PLUGIN_TEXTXSLATE_SETTINGS';
 }
 
 sub page {

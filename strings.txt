@@ -1,0 +1,7 @@
+PLUGIN_TEXTXSLATE_SETTINGS
+	EN	Text::Xslate Format
+	DE	Text::Xslate Format
+	FR	Format Text::Xslate
+	NL	Text::Xslate-indeling
+	ZH_CN	Text::Xslate 格式
+	ZH_TW	Text::Xslate 格式
