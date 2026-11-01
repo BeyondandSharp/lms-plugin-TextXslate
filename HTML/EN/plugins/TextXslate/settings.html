@@ -8,10 +8,13 @@
  <div class="settingGroup">
   <h3>Text::Xslate function table</h3>
   <div class="tx-hint">
-   Perl function table used by Text::Xslate templates.  Arguments are evaluated by Text::Xslate;
-   return a hash of function names to coderefs.  Custom functions use the <code>tx_</code> prefix
-   (for example <code>tx_num</code>, <code>tx_pad</code>, <code>tx_substr</code>) to avoid
-   collisions with Perl built-ins.  Changes take effect after restarting LMS.
+   Perl function table used by Text::Xslate templates.  This file is an ordinary Perl module:
+   write the subs, then list them in <code>build()</code>.  The functions have no prefix (for
+   example <code>number()</code>, <code>pad()</code>, <code>prefix()</code>); names that would be
+   ambiguous next to a Perl built-in are spelled out (<code>hexadecimal</code>,
+   <code>character</code>, <code>subtract</code>).  The helpers <code>_text()</code>,
+   <code>_integer()</code> and <code>_truthy()</code> normalise arguments.  The file is loaded
+   once, so changes take effect after restarting LMS.
   </div>
   <textarea name="functionsSource" id="txFunctions" rows="30" class="tx-code-input">[% functionsSource | html %]</textarea>
  </div>

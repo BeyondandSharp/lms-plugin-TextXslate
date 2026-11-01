@@ -1,95 +1,699 @@
-# TextXslate function table.
+# Text::Xslate template functions for the TextXslate plugin.
 #
-# This file is editable from the TextXslate plugin settings page.  The code
-# below is evaluated once per formatting call.  $_[0] is not used; the fields
-# hash is provided by the plugin in
-# $Plugins::TextXslate::API::CURRENT_FIELDS.
+# This single file is the complete template-function library.  It is the file
+# you edit from the plugin's settings page in the LMS web UI, so it is kept as
+# plain and readable as possible.
 #
-# Add or replace entries in the returned hash.  Every function receives the
-# evaluated template arguments and returns a string/number.
+# Contract with the plugin:
+#   * build($fields) returns the table of template functions for one render.
+#   * $fields is the hash of track fields templates see as <: $title :>.
+#   * every function listed in build() receives the evaluated template
+#     arguments and returns a string or a number.
+#   * state written by set() is visible to get() during the same render only.
+#
+# To add a function: write the sub, then list it in build().
+# To remove one: delete both places.
+#
+# The file is loaded once with require(), so edits take effect after
+# restarting LMS.
+#
+## no critic (Modules::RequireFilenameMatchesPackage)
 package Plugins::TextXslate::Functions;
 
 use strict;
 use warnings;
 
-my $fields = $Plugins::TextXslate::API::CURRENT_FIELDS || {};
-my %fields = %$fields;
-my %vars;
-my $meta = sub {
-	my $name = lc(Plugins::TextXslate::API::_string(shift));
-	$name =~ s/^_//;
-	$name =~ s/[^a-z0-9_]+/_/g;
-	return Plugins::TextXslate::API::_string($fields{$name});
-};
+use File::Basename ();
+
+# ---------------------------------------------------------------------------
+# Argument helpers
+# ---------------------------------------------------------------------------
+
+# Turn any template value into a string: undef and unusable references become
+# "", arrays are joined with ", ".
+sub _text {
+	my ($value) = @_;
+
+	return '' if !defined $value;
+	return $value if !ref $value;
+
+	if ( ref $value eq 'ARRAY' ) {
+		return join ', ', map { _text($_) } @{$value};
+	}
+
+	return "$value";
+}
+
+# Turn any template value into an integer, or 0 when it has no leading digits.
+sub _integer {
+	my ($value) = @_;
+
+	return 0 if !defined $value || "$value" !~ m{ ^ \s* -? \d+ }x;
+
+	return int $value;
+}
+
+# Perl truthiness plus the template layer's rules: undef, "" and strings made
+# only of zeroes are false.
+sub _truthy {
+	my ($value) = @_;
+
+	return 0 if !defined $value;
+	return 0 if !ref $value && "$value" eq '';
+	return 0 if !ref $value && "$value" =~ m{ ^ \s* 0+ \s* $ }x;
+
+	return 1;
+}
+
+# Look up a foobar2000-style field name in the current track fields.
+sub _meta {
+	my ( $fields, $name ) = @_;
+
+	my $key = lc _text($name);
+	$key =~ s{ ^ _ }{}x;
+	$key =~ s{ [^a-z0-9_]+ }{_}gx;
+
+	return _text( $fields->{$key} );
+}
+
+# Pad or truncate to a width; $align is where the text itself goes.
+sub _pad {
+	my ( $value, $width, $char, $align ) = @_;
+
+	$width = _integer($width);
+	$char  = defined $char && $char ne '' ? _text($char) : ' ';
+
+	my $text    = _text($value);
+	my $missing = $width - length $text;
+
+	return $text if $missing <= 0;
+
+	my $padding = $char x $missing;
+
+	return defined $align && $align eq 'left'
+		? $text . $padding
+		: $padding . $text;
+}
+
+# ---------------------------------------------------------------------------
+# Numbers and padding
+# ---------------------------------------------------------------------------
+
+sub number {
+	my ( $value, $width ) = @_;
+
+	$width = _integer($width) || 1;
+
+	return sprintf '%0*d', $width, _integer($value);
+}
+
+# pad($value, $width, $char, $align)
+#   $align is 'right' (default) to right-align the text, 'left' for the other
+#   side.  The pad character defaults to a space.
+sub pad {
+	my ( $value, $width, $char, $align ) = @_;
+
+	return _pad( $value, $width, $char, $align );
+}
+
+# Like pad() but the result is truncated to exactly $width characters.
+sub pad_cut {
+	my ( $value, $width, $char, $align ) = @_;
+
+	my $padded = _pad( $value, $width, $char, $align );
+
+	return substr $padded, 0, _integer($width);
+}
+
+sub hexadecimal {
+	my ( $value, $width ) = @_;
+
+	return defined $width
+		? sprintf '%0*x', $width, _integer($value)
+		: sprintf '%x', _integer($value);
+}
+
+sub roman {
+	my ($value) = @_;
+
+	my $number = _integer($value);
+	return '' if $number <= 0;
+
+	my @values = ( 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 );
+	my @digits = qw( M CM D CD C XC L XL X IX V IV I );
+
+	my $result = '';
+	for my $index ( 0 .. $#values ) {
+		while ( $number >= $values[$index] ) {
+			$result .= $digits[$index];
+			$number -= $values[$index];
+		}
+	}
+
+	return $result;
+}
+
+sub character {
+	my ($value) = @_;
+
+	return chr _integer($value);
+}
+
+# ---------------------------------------------------------------------------
+# Slicing
+# ---------------------------------------------------------------------------
+
+# The first $length characters.
+sub prefix {
+	my ( $value, $length ) = @_;
+
+	return substr _text($value), 0, _integer($length);
+}
+
+# The last $length characters.
+sub suffix {
+	my ( $value, $length ) = @_;
+
+	my $text = _text($value);
+	$length = _integer($length);
+
+	return $length >= length $text ? $text : substr $text, -$length;
+}
+
+sub substring {
+	my ( $value, $start, $end ) = @_;
+
+	my $text = _text($value);
+	$start = _integer($start);
+	$end   = _integer($end);
+
+	return substr $text, $start, $end - $start;
+}
+
+sub insert {
+	my ( $value, $inserted, $offset ) = @_;
+
+	my $text = _text($value);
+	$offset = _integer($offset);
+
+	return substr( $text, 0, $offset ) . _text($inserted) . substr( $text, $offset );
+}
+
+sub position {
+	my ( $value, $needle ) = @_;
+
+	my $position = index _text($value), _text($needle);
+
+	return $position < 0 ? 0 : $position;
+}
+
+sub last_position {
+	my ( $value, $needle ) = @_;
+
+	my $position = rindex _text($value), _text($needle);
+
+	return $position < 0 ? 0 : $position;
+}
+
+# ---------------------------------------------------------------------------
+# Case and whitespace
+# ---------------------------------------------------------------------------
+
+sub len {
+	my ($value) = @_;
+
+	return length _text($value);
+}
+
+sub lower {
+	my ($value) = @_;
+
+	return lc _text($value);
+}
+
+sub upper {
+	my ($value) = @_;
+
+	return uc _text($value);
+}
+
+# Capitalise the first letter of every word.  A truthy second argument keeps
+# the rest of the text as it is; otherwise it is lowercased first.
+sub title_case {
+	my ( $value, $keep_existing ) = @_;
+
+	my $text = _text($value);
+	$text = lc $text if !_truthy($keep_existing);
+	$text =~ s/ \b ([a-z]) /\u$1/gx;
+
+	return $text;
+}
+
+sub trim {
+	my ($value) = @_;
+
+	my $text = _text($value);
+	$text =~ s{ ^ \s+ | \s+ $ }{}gx;
+
+	return $text;
+}
+
+sub replace {
+	my ( $value, @pairs ) = @_;
+
+	my $text = _text($value);
+	while ( @pairs >= 2 ) {
+		my $from = shift @pairs;
+		my $to   = shift @pairs;
+		next if !defined $from || $from eq '';
+		$text =~ s{ \Q$from\E }{$to}gx;
+	}
+
+	return $text;
+}
+
+sub repeat {
+	my ( $value, $count ) = @_;
+
+	return _text($value) x _integer($count);
+}
+
+sub abbreviate {
+	my ( $value, $width ) = @_;
+
+	my $text = _text($value);
+	return $text if defined $width && length $text <= _integer($width);
+
+	my @initials;
+	for my $word ( split m{ \s+ }x, $text ) {
+		push @initials, uc substr $word, 0, 1 if length $word;
+	}
+
+	my $abbreviation = join '', @initials;
+
+	return $abbreviation || $text;
+}
+
+sub first_line {
+	my ( $value, $suffix ) = @_;
+
+	my $text = _text($value);
+	$suffix = ' (...)' if !defined $suffix;
+	$text =~ s{ [\r\n] .* }{}sx;
+
+	return $text . $suffix;
+}
+
+# ---------------------------------------------------------------------------
+# Selection and comparison
+# ---------------------------------------------------------------------------
+
+sub choose {
+	my ( $index, @values ) = @_;
+
+	$index = _integer($index);
+
+	return defined $values[$index] ? _text( $values[$index] ) : '';
+}
+
+# The first argument that is true; handy for optional fields.
+sub first_value {
+	my (@values) = @_;
+
+	for my $value (@values) {
+		return _text($value) if _truthy($value);
+	}
+
+	return '';
+}
+
+sub if_greater {
+	my ( $lhs, $rhs, $when_greater, $when_not ) = @_;
+
+	return _integer($lhs) > _integer($rhs)
+		? _text($when_greater)
+		: _text($when_not);
+}
+
+sub if_longer {
+	my ( $value, $length, $when_longer, $when_not ) = @_;
+
+	return length _text($value) > _integer($length)
+		? _text($when_longer)
+		: _text($when_not);
+}
+
+sub greater {
+	my ( $lhs, $rhs ) = @_;
+
+	return _integer($lhs) > _integer($rhs) ? 1 : 0;
+}
+
+sub longer {
+	my ( $lhs, $rhs ) = @_;
+
+	return length _text($lhs) > length _text($rhs) ? 1 : 0;
+}
+
+sub compare {
+	my ( $lhs, $rhs ) = @_;
+
+	return _text($lhs) cmp _text($rhs);
+}
+
+sub compare_ignore_case {
+	my ( $lhs, $rhs ) = @_;
+
+	return lc _text($lhs) cmp lc _text($rhs);
+}
+
+sub longest {
+	my (@values) = @_;
+
+	my $longest = '';
+	for my $value (@values) {
+		my $text = _text($value);
+		$longest = $text if length $text > length $longest;
+	}
+
+	return $longest;
+}
+
+sub shortest {
+	my (@values) = @_;
+
+	my $shortest;
+	for my $value (@values) {
+		my $text = _text($value);
+		$shortest = $text if !defined $shortest || length $text < length $shortest;
+	}
+
+	return defined $shortest ? $shortest : '';
+}
+
+# ---------------------------------------------------------------------------
+# Arithmetic
+# ---------------------------------------------------------------------------
+
+sub sum {
+	my (@values) = @_;
+
+	my $total = 0;
+	$total += _integer($_) for @values;
+
+	return $total;
+}
+
+sub subtract {
+	my ( $lhs, $rhs ) = @_;
+
+	return _integer($lhs) - _integer($rhs);
+}
+
+sub multiply {
+	my (@values) = @_;
+
+	my $total = 1;
+	$total *= _integer($_) for @values;
+
+	return $total;
+}
+
+sub divide {
+	my ( $lhs, $rhs ) = @_;
+
+	$rhs = _integer($rhs);
+
+	return $rhs ? int( _integer($lhs) / $rhs ) : 0;
+}
+
+sub modulo {
+	my ( $lhs, $rhs ) = @_;
+
+	$rhs = _integer($rhs);
+
+	return $rhs ? _integer($lhs) % $rhs : 0;
+}
+
+sub multiply_divide {
+	my ( $lhs, $rhs, $divisor ) = @_;
+
+	$divisor = _integer($divisor);
+
+	return $divisor ? int( _integer($lhs) * _integer($rhs) / $divisor ) : 0;
+}
+
+sub min {
+	my (@values) = @_;
+
+	my $minimum = _integer( shift @values );
+	for my $value (@values) {
+		my $number = _integer($value);
+		$minimum = $number if $number < $minimum;
+	}
+
+	return $minimum;
+}
+
+sub max {
+	my (@values) = @_;
+
+	my $maximum = _integer( shift @values );
+	for my $value (@values) {
+		my $number = _integer($value);
+		$maximum = $number if $number > $maximum;
+	}
+
+	return $maximum;
+}
+
+# ---------------------------------------------------------------------------
+# Logic
+# ---------------------------------------------------------------------------
+
+sub negate {
+	my ($value) = @_;
+
+	return _truthy($value) ? 0 : 1;
+}
+
+sub all {
+	my (@values) = @_;
+
+	for my $value (@values) {
+		return 0 if !_truthy($value);
+	}
+
+	return 1;
+}
+
+sub any {
+	my (@values) = @_;
+
+	for my $value (@values) {
+		return 1 if _truthy($value);
+	}
+
+	return 0;
+}
+
+sub exactly_one {
+	my ( $lhs, $rhs ) = @_;
+
+	return ( _truthy($lhs) xor _truthy($rhs) ) ? 1 : 0;
+}
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+sub directory {
+	my ( $path, $levels ) = @_;
+
+	my $result  = File::Basename::dirname( _text($path) );
+	my $upwards = _integer($levels) - 1;
+
+	while ( $upwards > 0 ) {
+		$result = File::Basename::dirname($result);
+		$upwards--;
+	}
+
+	return $result;
+}
+
+sub filename {
+	my ($path) = @_;
+
+	return File::Basename::basename( _text($path) );
+}
+
+sub ext {
+	my ($path) = @_;
+
+	my ($extension) = _text($path) =~ m{ \. ([^./]+) $ }x;
+
+	return defined $extension ? $extension : '';
+}
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+sub crlf {
+
+	return "\n";
+}
+
+sub tab {
+	my ($count) = @_;
+
+	$count = _integer($count);
+	$count = 1 if $count < 1;
+
+	return "\t" x $count;
+}
+
+# Placeholder for visual functions that have no meaning in a text file.
+sub identity {
+	my ($value) = @_;
+
+	return _text($value);
+}
+
+sub color {
+
+	return '';
+}
+
+sub progress {
+	my ( $position, $range, $width, $fill, $empty ) = @_;
+
+	$width = _integer($width) || 10;
+	$range = _integer($range);
+	$range = 1 if $range < 1;
+
+	my $filled = int( _integer($position) * $width / $range );
+	$filled = 0 if $filled < 0;
+	$filled = $width if $filled > $width;
+
+	$fill  = defined $fill  ? $fill  : '#';
+	$empty = defined $empty ? $empty : '-';
+
+	return ( $fill x $filled ) . ( $empty x ( $width - $filled ) );
+}
+
+sub random {
+
+	return int( rand(4294967296) );
+}
+
+# ---------------------------------------------------------------------------
+# Functions that need the track fields or per-render state
+# ---------------------------------------------------------------------------
+
+sub _stateful {
+	my ( $fields, $vars ) = @_;
 
 	return {
-		tx_num       => sub { my ($v,$w)=@_; $w=Plugins::TextXslate::API::_number($w)||1; return sprintf('%0*d', $w, Plugins::TextXslate::API::_number($v)); },
-		tx_pad       => sub { my ($v,$w,$c)=@_; $w=Plugins::TextXslate::API::_number($w); $c=defined $c && $c ne '' ? Plugins::TextXslate::API::_string($c) : ' '; my $s=Plugins::TextXslate::API::_string($v); return length($s)>=$w ? $s : ($c x ($w-length($s))).$s; },
-		tx_pad_right => sub { my ($v,$w,$c)=@_; $w=Plugins::TextXslate::API::_number($w); $c=defined $c && $c ne '' ? Plugins::TextXslate::API::_string($c) : ' '; my $s=Plugins::TextXslate::API::_string($v); return length($s)>=$w ? $s : $s.($c x ($w-length($s))); },
-		tx_padcut    => sub { my ($v,$w,$c)=@_; $w=Plugins::TextXslate::API::_number($w); $c=defined $c && $c ne '' ? Plugins::TextXslate::API::_string($c) : ' '; my $s=Plugins::TextXslate::API::_string($v); $s=($c x ($w-length($s))).$s if length($s)<$w; return substr($s,0,$w); },
-		tx_padcut_right => sub { my ($v,$w,$c)=@_; $w=Plugins::TextXslate::API::_number($w); $c=defined $c && $c ne '' ? Plugins::TextXslate::API::_string($c) : ' '; my $s=Plugins::TextXslate::API::_string($v); $s=$s.($c x ($w-length($s))) if length($s)<$w; return substr($s,0,$w); },
-		tx_left      => sub { my ($v,$n)=@_; return substr(Plugins::TextXslate::API::_string($v),0,Plugins::TextXslate::API::_number($n)); },
-		tx_right     => sub { my ($v,$n)=@_; my $s=Plugins::TextXslate::API::_string($v); $n=Plugins::TextXslate::API::_number($n); return $n>=length($s) ? $s : substr($s,-$n); },
-		tx_cut       => sub { my ($v,$n)=@_; return substr(Plugins::TextXslate::API::_string($v),0,Plugins::TextXslate::API::_number($n)); },
-		tx_substr    => sub { my ($v,$start,$end)=@_; my $s=Plugins::TextXslate::API::_string($v); $start=Plugins::TextXslate::API::_number($start); $end=Plugins::TextXslate::API::_number($end); return substr($s,$start,$end-$start); },
-		tx_len       => sub { return length(Plugins::TextXslate::API::_string(shift)); },
-		tx_len2      => sub { return length(Plugins::TextXslate::API::_string(shift)); },
-		tx_lower     => sub { return lc(Plugins::TextXslate::API::_string(shift)); },
-		tx_upper     => sub { return uc(Plugins::TextXslate::API::_string(shift)); },
-		tx_caps      => sub { my $s=lc(Plugins::TextXslate::API::_string(shift)); $s =~ s/\b([a-z])/\u$1/g; return $s; },
-		tx_caps2     => sub { my $s=Plugins::TextXslate::API::_string(shift); $s =~ s/\b([a-z])/\u$1/g; return $s; },
-		tx_trim      => sub { my $s=Plugins::TextXslate::API::_string(shift); $s =~ s/^\s+|\s+$//g; return $s; },
-		tx_replace   => sub { my ($v,@args)=@_; my $s=Plugins::TextXslate::API::_string($v); while (@args>=2) { my $from=shift @args; my $to=shift @args; next if !defined $from || $from eq ''; $s =~ s/\Q$from\E/$to/g; } return $s; },
-		tx_repeat    => sub { my ($v,$n)=@_; return Plugins::TextXslate::API::_string($v) x Plugins::TextXslate::API::_number($n); },
-		tx_select    => sub { my ($n,@args)=@_; $n=Plugins::TextXslate::API::_number($n); return defined $args[$n] ? Plugins::TextXslate::API::_string($args[$n]) : ''; },
-		tx_if2       => sub { for my $v (@_) { return Plugins::TextXslate::API::_string($v) if Plugins::TextXslate::API::_truthy($v); } return ''; },
-		tx_if3       => sub { for my $v (@_) { return Plugins::TextXslate::API::_string($v) if Plugins::TextXslate::API::_truthy($v); } return ''; },
-		tx_ifgreater => sub { my ($a,$b,$x,$y)=@_; return Plugins::TextXslate::API::_number($a)>Plugins::TextXslate::API::_number($b) ? Plugins::TextXslate::API::_string($x) : Plugins::TextXslate::API::_string($y); },
-		tx_iflonger  => sub { my ($a,$b,$x,$y)=@_; return length(Plugins::TextXslate::API::_string($a))>Plugins::TextXslate::API::_number($b) ? Plugins::TextXslate::API::_string($x) : Plugins::TextXslate::API::_string($y); },
-		tx_greater   => sub { my ($a,$b)=@_; return Plugins::TextXslate::API::_number($a)>Plugins::TextXslate::API::_number($b) ? 1 : 0; },
-		tx_longer    => sub { my ($a,$b)=@_; return length(Plugins::TextXslate::API::_string($a))>length(Plugins::TextXslate::API::_string($b)) ? 1 : 0; },
-		tx_strcmp    => sub { my ($a,$b)=@_; return Plugins::TextXslate::API::_string($a) cmp Plugins::TextXslate::API::_string($b); },
-		tx_stricmp   => sub { my ($a,$b)=@_; return lc(Plugins::TextXslate::API::_string($a)) cmp lc(Plugins::TextXslate::API::_string($b)); },
-		tx_add       => sub { my $n=0; $n += Plugins::TextXslate::API::_number($_) for @_; return $n; },
-		tx_sub       => sub { my ($a,$b)=@_; return Plugins::TextXslate::API::_number($a)-Plugins::TextXslate::API::_number($b); },
-		tx_mul       => sub { my $n=1; $n *= Plugins::TextXslate::API::_number($_) for @_; return $n; },
-		tx_div       => sub { my ($a,$b)=@_; $b=Plugins::TextXslate::API::_number($b); return $b ? int(Plugins::TextXslate::API::_number($a)/$b) : 0; },
-		tx_mod       => sub { my ($a,$b)=@_; $b=Plugins::TextXslate::API::_number($b); return $b ? Plugins::TextXslate::API::_number($a)%$b : 0; },
-		tx_muldiv    => sub { my ($a,$b,$c)=@_; $c=Plugins::TextXslate::API::_number($c); return $c ? int(Plugins::TextXslate::API::_number($a)*Plugins::TextXslate::API::_number($b)/$c) : 0; },
-		tx_min       => sub { my $n=Plugins::TextXslate::API::_number(shift); $n=Plugins::TextXslate::API::_number($_)<$n?Plugins::TextXslate::API::_number($_):$n for @_; return $n; },
-		tx_max       => sub { my $n=Plugins::TextXslate::API::_number(shift); $n=Plugins::TextXslate::API::_number($_)>$n?Plugins::TextXslate::API::_number($_):$n for @_; return $n; },
-		tx_not       => sub { return Plugins::TextXslate::API::_truthy(shift) ? 0 : 1; },
-		tx_and       => sub { for (@_) { return 0 unless Plugins::TextXslate::API::_truthy($_) } return 1; },
-		tx_or        => sub { for (@_) { return 1 if Plugins::TextXslate::API::_truthy($_) } return 0; },
-		tx_xor       => sub { my ($a,$b)=@_; return (Plugins::TextXslate::API::_truthy($a) xor Plugins::TextXslate::API::_truthy($b)) ? 1 : 0; },
-		tx_hex       => sub { my ($v,$w)=@_; return defined $w ? sprintf('%0*x',$w,Plugins::TextXslate::API::_number($v)) : sprintf('%x',Plugins::TextXslate::API::_number($v)); },
-		tx_roman     => sub { my $n=Plugins::TextXslate::API::_number(shift); return '' if $n<=0; my @v=(1000,900,500,400,100,90,50,40,10,9,5,4,1); my @r=qw(M CM D CD C XC L XL X IX V IV I); my $o=''; for my $i (0..$#v) { while ($n >= $v[$i]) { $o.=$r[$i]; $n-=$v[$i]; } } return $o; },
-		tx_char      => sub { return chr(Plugins::TextXslate::API::_number(shift)); },
-		tx_crlf      => sub { return "\n"; },
-		tx_tab       => sub { my $n=Plugins::TextXslate::API::_number(shift); $n=1 if $n<1; return "\t" x $n; },
-		tx_directory => sub { my ($v,$n)=@_; my $p=Plugins::TextXslate::API::_string($v); my $d=File::Basename::dirname($p); if (Plugins::TextXslate::API::_number($n)>1) { for (2..Plugins::TextXslate::API::_number($n)) { $d=File::Basename::dirname($d); } } return $d; },
-		tx_filename  => sub { return File::Basename::basename(Plugins::TextXslate::API::_string(shift)); },
-		tx_ext       => sub { my $s=Plugins::TextXslate::API::_string(shift); return $s =~ /\.([^.\/]+)$/ ? $1 : ''; },
-		tx_meta      => $meta,
-		tx_meta_test => sub { return length($meta->(shift)) ? 1 : 0; },
-		tx_extra     => $meta,
-		tx_strchr    => sub { my ($s,$c)=@_; my $i=index(Plugins::TextXslate::API::_string($s),Plugins::TextXslate::API::_string($c)); return $i<0?0:$i; },
-		tx_strrchr   => sub { my ($s,$c)=@_; my $i=rindex(Plugins::TextXslate::API::_string($s),Plugins::TextXslate::API::_string($c)); return $i<0?0:$i; },
-		tx_strstr    => sub { my ($s,$c)=@_; my $i=index(Plugins::TextXslate::API::_string($s),Plugins::TextXslate::API::_string($c)); return $i<0?0:$i; },
-		tx_insert    => sub { my ($s,$v,$n)=@_; my $p=Plugins::TextXslate::API::_string($s); $n=Plugins::TextXslate::API::_number($n); return substr($p,0,$n).Plugins::TextXslate::API::_string($v).substr($p,$n); },
-		tx_abbr      => sub { my ($v,$n)=@_; my $s=Plugins::TextXslate::API::_string($v); return $s if defined $n && length($s)<=Plugins::TextXslate::API::_number($n); my @w=grep { length } split /\s+/, $s; return join('', map { uc(substr($_,0,1)) } @w) || $s; },
-		tx_fix_eol   => sub { my ($v,$suffix)=@_; my $s=Plugins::TextXslate::API::_string($v); $suffix=' (...)' unless defined $suffix; $s =~ s/[\r\n].*//s; return $s.$suffix; },
-		tx_longest   => sub { my $best=''; for (@_) { my $s=Plugins::TextXslate::API::_string($_); $best=$s if length($s)>length($best) } return $best; },
-		tx_shortest  => sub { my $best; for (@_) { my $s=Plugins::TextXslate::API::_string($_); $best=$s if !defined $best || length($s)<length($best) } return defined $best?$best:''; },
-		tx_put       => sub { my ($name,$value)=@_; $vars{lc(Plugins::TextXslate::API::_string($name))}=Plugins::TextXslate::API::_string($value); return Plugins::TextXslate::API::_string($value); },
-		tx_puts      => sub { my ($name,$value)=@_; $vars{lc(Plugins::TextXslate::API::_string($name))}=Plugins::TextXslate::API::_string($value); return ''; },
-		tx_get       => sub { return Plugins::TextXslate::API::_string($vars{lc(Plugins::TextXslate::API::_string(shift))}); },
-		tx_ansi      => sub { return Plugins::TextXslate::API::_string(shift); },
-		tx_set_color => sub { return ''; },
-		tx_rgb       => sub { return ''; },
-		tx_blend     => sub { return Plugins::TextXslate::API::_string(shift); },
-		transition=> sub { return Plugins::TextXslate::API::_string(shift); },
-		tx_progress  => sub { my ($pos,$range,$width,$fill,$empty)=@_; $width=Plugins::TextXslate::API::_number($width)||10; $range=Plugins::TextXslate::API::_number($range); $range=1 if $range<1; my $n=int(Plugins::TextXslate::API::_number($pos)*$width/$range); $n=0 if $n<0; $n=$width if $n>$width; $fill=defined $fill?$fill:'#'; $empty=defined $empty?$empty:'-'; return ($fill x $n).($empty x ($width-$n)); },
-		tx_progress2 => sub { my ($pos,$range,$width,$fill,$empty)=@_; $width=Plugins::TextXslate::API::_number($width)||10; $range=Plugins::TextXslate::API::_number($range); $range=1 if $range<1; my $n=int(Plugins::TextXslate::API::_number($pos)*$width/$range); $n=0 if $n<0; $n=$width if $n>$width; $fill=defined $fill?$fill:'='; $empty=defined $empty?$empty:'-'; return ($fill x $n).($empty x ($width-$n)); },
-		tx_rand      => sub { return int(rand(4294967296)); },
+		meta => sub {
+			return _meta( $fields, shift );
+		},
+		has_meta => sub {
+			return length _meta( $fields, shift ) ? 1 : 0;
+		},
+		set => sub {
+			my ( $name, $value, $quiet ) = @_;
+			$vars->{ lc _text($name) } = _text($value);
+			return _truthy($quiet) ? '' : _text($value);
+		},
+		get => sub {
+			return _text( $vars->{ lc _text(shift) } );
+		},
 	};
+}
+
+# ---------------------------------------------------------------------------
+# The function table exposed to templates
+# ---------------------------------------------------------------------------
+
+sub build {
+	my ( $class, $fields ) = @_;
+
+	$fields ||= {};
+	my %vars;
+
+	return {
+		# Numbers and padding
+		number      => \&number,
+		pad         => \&pad,
+		pad_cut     => \&pad_cut,
+		hexadecimal => \&hexadecimal,
+		roman       => \&roman,
+		character   => \&character,
+
+		# Slicing
+		prefix        => \&prefix,
+		suffix        => \&suffix,
+		substring     => \&substring,
+		insert        => \&insert,
+		position      => \&position,
+		last_position => \&last_position,
+
+		# Strings
+		len        => \&len,
+		lower      => \&lower,
+		upper      => \&upper,
+		title_case => \&title_case,
+		trim       => \&trim,
+		replace    => \&replace,
+		repeat     => \&repeat,
+		abbreviate => \&abbreviate,
+		first_line => \&first_line,
+
+		# Selection and comparison
+		choose              => \&choose,
+		first_value         => \&first_value,
+		if_greater          => \&if_greater,
+		if_longer           => \&if_longer,
+		greater             => \&greater,
+		longer              => \&longer,
+		compare             => \&compare,
+		compare_ignore_case => \&compare_ignore_case,
+		longest             => \&longest,
+		shortest            => \&shortest,
+
+		# Arithmetic
+		sum             => \&sum,
+		subtract        => \&subtract,
+		multiply        => \&multiply,
+		divide          => \&divide,
+		modulo          => \&modulo,
+		multiply_divide => \&multiply_divide,
+		min             => \&min,
+		max             => \&max,
+
+		# Logic
+		negate      => \&negate,
+		all         => \&all,
+		any         => \&any,
+		exactly_one => \&exactly_one,
+
+		# Paths
+		directory => \&directory,
+		filename  => \&filename,
+		ext       => \&ext,
+
+		# Output helpers
+		crlf     => \&crlf,
+		tab      => \&tab,
+		identity => \&identity,
+		color    => \&color,
+		progress => \&progress,
+		random   => \&random,
+
+		# Fields and per-render state
+		%{ _stateful( $fields, \%vars ) },
+	};
+}
+
+1;

@@ -1,0 +1,31 @@
+# Perl::Critic profile for the TextXslate plugin.
+#
+# The code follows "Perl Best Practices" as encoded by Perl::Critic at
+# severity 3, which is the level the book recommends.  Run the gate with:
+#
+#     perlcritic --quiet API.pm functions.pl Plugin.pm Settings.pm
+#
+# Deliberate exceptions are documented in the source with `## no critic`
+# annotations that carry a reason, rather than being switched off globally
+# here.  Keep it that way: a policy disabled in this file is disabled for
+# every file in the project.
+#
+# Notes on the two documented exceptions:
+#
+#   * functions.pl is the template-function library that users edit from the
+#     settings page.  Its file name is fixed by the plugin, while its package
+#     name is chosen by convention, so Modules::RequireFilenameMatchesPackage
+#     does not apply to it.
+#
+#   * Plugins::TextXslate::API::format must keep its name because the
+#     MusicArtistInfo plugin calls it as part of the published plugin API
+#     (Subroutines::ProhibitBuiltinHomonyms).
+#
+# Severity 2 policies (for example ControlStructures::ProhibitPostfixControls
+# and ValuesAndExpressions::ProhibitMagicNumbers) are intentionally not part
+# of the gate: several of them contradict each other and none of them affect
+# correctness.
+
+severity = 3
+verbose  = %f:%l:%c: %m [%p]\n
+color    = 0

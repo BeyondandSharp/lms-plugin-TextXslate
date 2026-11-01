@@ -19,13 +19,13 @@ my $log = Slim::Utils::Log->addLogCategory({
 our $VERSION;
 
 sub initPlugin {
-	my $class = shift;
+	my ($class) = @_;
 
 	$VERSION = $class->_pluginDataFor('version') || '0.0.0';
 
 	Plugins::TextXslate::API->register;
 
-	if (main::WEBUI) {
+	if ( defined &main::WEBUI && main::WEBUI() ) {
 		require Plugins::TextXslate::Settings;
 		Plugins::TextXslate::Settings->new();
 	}
@@ -33,6 +33,8 @@ sub initPlugin {
 	return 1;
 }
 
-sub playerMenu {}
+sub playerMenu {
+	return;
+}
 
 1;
