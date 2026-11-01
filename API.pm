@@ -8,6 +8,8 @@ use File::Basename ();
 
 our $REGISTERED = 0;
 
+my %TAG_CACHE;
+
 sub register {
 	my ($class) = @_;
 	$REGISTERED = 1;
@@ -32,9 +34,10 @@ sub format {
 
 	my $out = eval {
 		my $tx = Text::Xslate->new(
-			syntax => 'Kolon',
-			cache  => 0,
-			module => [],
+			syntax   => 'Kolon',
+			cache    => 0,
+			module   => [],
+			function => _functions($fields),
 		);
 		$tx->render_string($template, $fields);
 	};
@@ -55,64 +58,246 @@ sub fields_for_track {
 	my %fields;
 	return \%fields unless $track && ref $track;
 
+	# LMS's well-known accessors.  These also work for the RemoteTrack
+	# emulation, which does not expose the database result source.
 	my %methods = (
 		title       => 'title',
 		artist      => 'artistName',
-		album       => 'albumname',
 		albumartist => 'albumartistName',
+		album       => 'albumname',
 		tracknumber => 'tracknum',
 		discnumber  => 'disc',
 		year        => 'year',
 		genre       => 'genre',
+		comment     => 'comment',
+		compilation => 'compilation',
 	);
 
-	foreach my $key (keys %methods) {
+	foreach my $key (sort keys %methods) {
 		my $method = $methods{$key};
+		next unless $track->can($method);
 		my $value = eval { $track->$method };
-		$fields{$key} = "$value" if defined $value && "$value" ne '';
+		_set_field(\%fields, $key, $value);
 	}
 
-	# Convenience fields used by the default filename templates.
-	for my $key (qw(discnumber tracknumber)) {
-		next unless defined $fields{$key} && $fields{$key} =~ /^\s*(\d+)/;
-		my $number = $1;
-		$fields{$key . '_padded'} = $key eq 'discnumber'
-			? sprintf('%d', $number)
-			: sprintf('%02d', $number);
-	}
 	for my $method (qw(originalartist origartist)) {
 		next unless $track->can($method);
 		my $value = eval { $track->$method };
-		if ( defined $value && "$value" ne '' ) {
-			$fields{origartist} = "$value";
-			last;
-		}
+		_set_field(\%fields, 'origartist', $value);
 	}
 	if ( !defined $fields{origartist} && $track->can('get_column') ) {
 		my $value = eval { $track->get_column('origartist') };
-		$fields{origartist} = "$value" if defined $value && "$value" ne '';
+		_set_field(\%fields, 'origartist', $value);
 	}
 
-	my $url = eval { $track->url } || '';
-	$fields{url} = $url if $url ne '';
-
-	if ( $url =~ m{^file://} ) {
+	for my $method (qw(url path)) {
+		next unless $track->can($method);
+		my $value = eval { $track->$method };
+		_set_field(\%fields, $method, $value);
+	}
+	if ( (!defined $fields{path} || $fields{path} eq '') && defined $fields{url} && $fields{url} =~ m{^file://} ) {
 		require Slim::Utils::Misc;
-		my $path = eval { Slim::Utils::Misc::pathFromFileURL($url) };
-		if ( defined $path && !utf8::is_utf8($path) ) {
-			my $decoded = eval { Encode::decode('UTF-8', $path, FB_CROAK) };
-			$path = $decoded if defined $decoded && !$@;
+		my $path = eval { Slim::Utils::Misc::pathFromFileURL($fields{url}) };
+		_set_field(\%fields, 'path', $path) if defined $path;
+	}
+
+	# Every database column is metadata too (bitrate, bpm, musicbrainz_id,
+	# virtual, work, performance, ...).  This keeps custom fields available
+	# without maintaining a second hard-coded list.
+	my @columns = eval {
+		$track->result_source ? $track->result_source->columns : ();
+	};
+	$@ = '';
+	for my $column (@columns) {
+		next if $column eq 'id';
+		my $value = eval { $track->get_column($column) };
+		_set_field(\%fields, $column, $value) if defined $value;
+	}
+
+	# Tags not represented in the database schema (ORIGARTIST, Mood, TXXX
+	# style custom tags, ...) are read from the source file.
+	my $path = $fields{path};
+	if ( defined $path && $path ne '' && -r $path ) {
+		my %tags = _scan_tags($path);
+		foreach my $key (keys %tags) {
+			my $name = lc $key;
+			$name =~ s/[^a-z0-9_]+/_/g;
+			$name =~ s/^_+|_+$//g;
+			next if $name eq '';
+			_set_field(\%fields, $name, $tags{$key});
 		}
-		if ( defined $path && $path ne '' ) {
-			$fields{path} = $path;
-			$fields{filename_ext} = File::Basename::basename($path);
-			$fields{filename} = $fields{filename_ext};
-			$fields{filename} =~ s/\.[^.]*$//;
-			$fields{directory} = File::Basename::dirname($path);
-		}
+	}
+
+	# Common aliases for the two number columns.
+	$fields{discnumber} = $fields{disc} if (!defined $fields{discnumber} || $fields{discnumber} eq '') && defined $fields{disc};
+	$fields{tracknumber} = $fields{tracknum} if (!defined $fields{tracknumber} || $fields{tracknumber} eq '') && defined $fields{tracknum};
+
+	# File/path convenience fields, matching foobar2000's tech-info names.
+	if ( defined $fields{path} && $fields{path} ne '' ) {
+		$fields{filename_ext} = File::Basename::basename($fields{path});
+		$fields{filename} = $fields{filename_ext};
+		$fields{filename} =~ s/\.[^.]*$//;
+		$fields{directory} = File::Basename::dirname($fields{path});
 	}
 
 	return \%fields;
+}
+
+sub _set_field {
+	my ($fields, $name, $value) = @_;
+	return unless defined $name && $name ne '' && defined $value;
+	if ( ref $value eq 'ARRAY' ) {
+		$value = join(', ', map { defined $_ ? "$_" : '' } @$value);
+	}
+	return if ref $value || $value eq '';
+	$name = lc $name;
+	$fields->{$name} = "$value"
+		if !exists $fields->{$name} || $fields->{$name} eq '';
+}
+
+sub _scan_tags {
+	my $path = shift;
+	return unless defined $path && $path ne '';
+
+	my $mtime = (stat($path))[9] || 0;
+	my $key = "$path\0$mtime";
+	return %{ $TAG_CACHE{$key} } if $TAG_CACHE{$key};
+
+	my $scan = eval {
+		require Audio::Scan;
+		Audio::Scan->scan_tags($path);
+	};
+	my $tags = $scan && ref $scan eq 'HASH' && ref $scan->{tags} eq 'HASH'
+		? $scan->{tags}
+		: {};
+
+	# Do not let artwork/binary blobs leak into formatting.
+	my %out;
+	foreach my $tag (keys %$tags) {
+		my $value = $tags->{$tag};
+		if ( ref $value eq 'ARRAY' ) {
+			$value = join(', ', map { defined $_ && !ref $_ ? "$_" : '' } @$value);
+		}
+		next if ref $value;
+		$out{$tag} = $value if defined $value && $value ne '';
+	}
+	$TAG_CACHE{$key} = \%out;
+	return %out;
+}
+
+sub _string {
+	my $value = shift;
+	return '' unless defined $value;
+	return $value if !ref $value;
+	if ( ref $value eq 'ARRAY' ) {
+		return join(', ', map { _string($_) } @$value);
+	}
+	return "$value";
+}
+
+sub _number {
+	my $value = shift;
+	return 0 unless defined $value && "$value" =~ /^\s*-?\d+/;
+	return int($value);
+}
+
+sub _numeric_arg {
+	my $value = shift;
+	return 0 unless defined $value && "$value" =~ /^\s*(-?\d+)/;
+	return int($1);
+}
+
+sub _truthy {
+	my $value = shift;
+	return 0 unless defined $value;
+	return 0 if !ref $value && "$value" eq '';
+	return 0 if !ref $value && "$value" =~ /^\s*0+\s*$/;
+	return 1;
+}
+
+sub _functions {
+	my $fields = shift || {};
+	my %fields = %$fields;
+
+	my %vars;
+	my $meta = sub {
+		my $name = lc(_string(shift));
+		$name =~ s/^_//;
+		$name =~ s/[^a-z0-9_]+/_/g;
+		return _string($fields{$name});
+	};
+
+	return {
+		num       => sub { my ($v,$w)=@_; $w=_number($w)||1; return sprintf('%0*d', $w, _number($v)); },
+		pad       => sub { my ($v,$w,$c)=@_; $w=_number($w); $c=defined $c && $c ne '' ? _string($c) : ' '; my $s=_string($v); return length($s)>=$w ? $s : ($c x ($w-length($s))).$s; },
+		pad_right => sub { my ($v,$w,$c)=@_; $w=_number($w); $c=defined $c && $c ne '' ? _string($c) : ' '; my $s=_string($v); return length($s)>=$w ? $s : $s.($c x ($w-length($s))); },
+		padcut    => sub { my ($v,$w,$c)=@_; $w=_number($w); $c=defined $c && $c ne '' ? _string($c) : ' '; my $s=_string($v); $s=($c x ($w-length($s))).$s if length($s)<$w; return substr($s,0,$w); },
+		padcut_right => sub { my ($v,$w,$c)=@_; $w=_number($w); $c=defined $c && $c ne '' ? _string($c) : ' '; my $s=_string($v); $s=$s.($c x ($w-length($s))) if length($s)<$w; return substr($s,0,$w); },
+		left      => sub { my ($v,$n)=@_; return substr(_string($v),0,_number($n)); },
+		right     => sub { my ($v,$n)=@_; my $s=_string($v); $n=_number($n); return $n>=length($s) ? $s : substr($s,-$n); },
+		cut       => sub { my ($v,$n)=@_; return substr(_string($v),0,_number($n)); },
+		substr    => sub { my ($v,$start,$end)=@_; my $s=_string($v); $start=_number($start); $end=_number($end); return substr($s,$start,$end-$start); },
+		len       => sub { return length(_string(shift)); },
+		len2      => sub { return length(_string(shift)); },
+		lower     => sub { return lc(_string(shift)); },
+		upper     => sub { return uc(_string(shift)); },
+		caps      => sub { my $s=lc(_string(shift)); $s =~ s/\b([a-z])/\u$1/g; return $s; },
+		caps2     => sub { my $s=_string(shift); $s =~ s/\b([a-z])/\u$1/g; return $s; },
+		trim      => sub { my $s=_string(shift); $s =~ s/^\s+|\s+$//g; return $s; },
+		replace   => sub { my ($v,@args)=@_; my $s=_string($v); while (@args>=2) { my $from=shift @args; my $to=shift @args; next if !defined $from || $from eq ''; $s =~ s/\Q$from\E/$to/g; } return $s; },
+		repeat    => sub { my ($v,$n)=@_; return _string($v) x _number($n); },
+		select    => sub { my ($n,@args)=@_; $n=_number($n); return defined $args[$n] ? _string($args[$n]) : ''; },
+		if2       => sub { for my $v (@_) { return _string($v) if _truthy($v); } return ''; },
+		if3       => sub { for my $v (@_) { return _string($v) if _truthy($v); } return ''; },
+		ifgreater => sub { my ($a,$b,$x,$y)=@_; return _number($a)>_number($b) ? _string($x) : _string($y); },
+		iflonger  => sub { my ($a,$b,$x,$y)=@_; return length(_string($a))>_number($b) ? _string($x) : _string($y); },
+		greater   => sub { my ($a,$b)=@_; return _number($a)>_number($b) ? 1 : 0; },
+		longer    => sub { my ($a,$b)=@_; return length(_string($a))>length(_string($b)) ? 1 : 0; },
+		strcmp    => sub { my ($a,$b)=@_; return _string($a) cmp _string($b); },
+		stricmp   => sub { my ($a,$b)=@_; return lc(_string($a)) cmp lc(_string($b)); },
+		add       => sub { my $n=0; $n += _number($_) for @_; return $n; },
+		sub       => sub { my ($a,$b)=@_; return _number($a)-_number($b); },
+		mul       => sub { my $n=1; $n *= _number($_) for @_; return $n; },
+		div       => sub { my ($a,$b)=@_; $b=_number($b); return $b ? int(_number($a)/$b) : 0; },
+		mod       => sub { my ($a,$b)=@_; $b=_number($b); return $b ? _number($a)%$b : 0; },
+		muldiv    => sub { my ($a,$b,$c)=@_; $c=_number($c); return $c ? int(_number($a)*_number($b)/$c) : 0; },
+		min       => sub { my $n=_number(shift); $n=_number($_)<$n?_number($_):$n for @_; return $n; },
+		max       => sub { my $n=_number(shift); $n=_number($_)>$n?_number($_):$n for @_; return $n; },
+		not       => sub { return _truthy(shift) ? 0 : 1; },
+		and       => sub { for (@_) { return 0 unless _truthy($_) } return 1; },
+		or        => sub { for (@_) { return 1 if _truthy($_) } return 0; },
+		xor       => sub { my ($a,$b)=@_; return (_truthy($a) xor _truthy($b)) ? 1 : 0; },
+		hex       => sub { my ($v,$w)=@_; return defined $w ? sprintf('%0*x',$w,_number($v)) : sprintf('%x',_number($v)); },
+		roman     => sub { my $n=_number(shift); return '' if $n<=0; my @v=(1000,900,500,400,100,90,50,40,10,9,5,4,1); my @r=qw(M CM D CD C XC L XL X IX V IV I); my $o=''; for my $i (0..$#v) { while ($n >= $v[$i]) { $o.=$r[$i]; $n-=$v[$i]; } } return $o; },
+		char      => sub { return chr(_number(shift)); },
+		crlf      => sub { return "\n"; },
+		tab       => sub { my $n=_number(shift); $n=1 if $n<1; return "\t" x $n; },
+		directory => sub { my ($v,$n)=@_; my $p=_string($v); my $d=File::Basename::dirname($p); if (_number($n)>1) { for (2.._number($n)) { $d=File::Basename::dirname($d); } } return $d; },
+		filename  => sub { return File::Basename::basename(_string(shift)); },
+		ext       => sub { my $s=_string(shift); return $s =~ /\.([^.\/]+)$/ ? $1 : ''; },
+		meta      => $meta,
+		meta_test => sub { return length($meta->(shift)) ? 1 : 0; },
+		extra     => $meta,
+		strchr    => sub { my ($s,$c)=@_; my $i=index(_string($s),_string($c)); return $i<0?0:$i; },
+		strrchr   => sub { my ($s,$c)=@_; my $i=rindex(_string($s),_string($c)); return $i<0?0:$i; },
+		strstr    => sub { my ($s,$c)=@_; my $i=index(_string($s),_string($c)); return $i<0?0:$i; },
+		insert    => sub { my ($s,$v,$n)=@_; my $p=_string($s); $n=_number($n); return substr($p,0,$n)._string($v).substr($p,$n); },
+		abbr      => sub { my ($v,$n)=@_; my $s=_string($v); return $s if defined $n && length($s)<=_number($n); my @w=grep { length } split /\s+/, $s; return join('', map { uc(substr($_,0,1)) } @w) || $s; },
+		fix_eol   => sub { my ($v,$suffix)=@_; my $s=_string($v); $suffix=' (...)' unless defined $suffix; $s =~ s/[\r\n].*//s; return $s.$suffix; },
+		longest   => sub { my $best=''; for (@_) { my $s=_string($_); $best=$s if length($s)>length($best) } return $best; },
+		shortest  => sub { my $best; for (@_) { my $s=_string($_); $best=$s if !defined $best || length($s)<length($best) } return defined $best?$best:''; },
+		put       => sub { my ($name,$value)=@_; $vars{lc(_string($name))}=_string($value); return _string($value); },
+		puts      => sub { my ($name,$value)=@_; $vars{lc(_string($name))}=_string($value); return ''; },
+		get       => sub { return _string($vars{lc(_string(shift))}); },
+		ansi      => sub { return _string(shift); },
+		set_color => sub { return ''; },
+		rgb       => sub { return ''; },
+		blend     => sub { return _string(shift); },
+		transition=> sub { return _string(shift); },
+		progress  => sub { my ($pos,$range,$width,$fill,$empty)=@_; $width=_number($width)||10; $range=_number($range); $range=1 if $range<1; my $n=int(_number($pos)*$width/$range); $n=0 if $n<0; $n=$width if $n>$width; $fill=defined $fill?$fill:'#'; $empty=defined $empty?$empty:'-'; return ($fill x $n).($empty x ($width-$n)); },
+		progress2 => sub { my ($pos,$range,$width,$fill,$empty)=@_; $width=_number($width)||10; $range=_number($range); $range=1 if $range<1; my $n=int(_number($pos)*$width/$range); $n=0 if $n<0; $n=$width if $n>$width; $fill=defined $fill?$fill:'='; $empty=defined $empty?$empty:'-'; return ($fill x $n).($empty x ($width-$n)); },
+		rand      => sub { return int(rand(4294967296)); },
+	};
 }
 
 1;
