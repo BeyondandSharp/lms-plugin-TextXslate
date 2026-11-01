@@ -24,6 +24,11 @@ sub prefs {
 sub handler {
 	my ($class, $client, $paramRef, $pageSetup) = @_;
 
+	$paramRef->{perlEditorAvailable} = eval {
+		require Plugins::PerlEditor::API;
+		Plugins::PerlEditor::API->available;
+	} ? 1 : 0;
+
 	my $file = _custom_file();
 	my $source = _read_file($file);
 	$source = _read_file(_default_file()) if !defined $source;

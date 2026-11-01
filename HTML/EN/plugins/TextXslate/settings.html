@@ -1,5 +1,4 @@
 [% PROCESS settings/header.html %]
-<link rel="stylesheet" href="[% webroot %]plugins/TextXslate/lib/prism/prism-tomorrow.min.css">
 <style>
 .tx-functions textarea.tx-code-input { display:block; width:100%; min-height:420px; box-sizing:border-box; font-family:monospace; font-size:13px; line-height:19px; }
 .tx-codejar-wrap { display:flex; border:1px solid #888; background:#1e1e1e; color:#d4d4d4; font-family:monospace; font-size:13px; line-height:19px; overflow:hidden; margin:4px 0; height:calc(30 * 19px + 12px); }
@@ -32,56 +31,16 @@
  </div>
 </div>
 
-<script src="[% webroot %]plugins/TextXslate/lib/codejar.min.js"></script>
-<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-core.min.js"></script>
-<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-clike.min.js"></script>
-<script src="[% webroot %]plugins/TextXslate/lib/prism/prism-perl.min.js"></script>
+[% IF perlEditorAvailable %]
+<script src="[% webroot %]plugins/PerlEditor/editor.js"></script>
 <script>
 (function () {
-	// The stock Perl grammar treats assignments like '$s=' as substitution
-	// regexes and can swallow following lines.  Keep only the slash-delimited
-	// regex rule; it is enough for the function table and avoids false tokens.
-	if (window.Prism && Prism.languages.perl && Array.isArray(Prism.languages.perl.regex) && Prism.languages.perl.regex.length) {
-		Prism.languages.perl.regex = [Prism.languages.perl.regex[Prism.languages.perl.regex.length - 1]];
-	}
+	if (!window.LMSPerlEditor) return;
 	var area = document.getElementById('txFunctions');
-	if (!area || !window.CodeJar || !window.Prism || !Prism.languages.perl) {
-		return;
+	if (area) {
+		try { window.LMSPerlEditor.attach(area); } catch (e) {}
 	}
-	var wrap = document.createElement('div');
-	wrap.className = 'tx-codejar-wrap';
-	var gutter = document.createElement('pre');
-	gutter.className = 'tx-codejar-gutter';
-	var editor = document.createElement('div');
-	editor.className = 'tx-codejar';
-	editor.setAttribute('role', 'textbox');
-	editor.setAttribute('aria-multiline', 'true');
-	wrap.appendChild(gutter);
-	wrap.appendChild(editor);
-	area.parentNode.insertBefore(wrap, area);
-	area.style.display = 'none';
-
-	var jar = new CodeJar(editor, function (el) {
-		el.innerHTML = Prism.highlight(el.textContent || '', Prism.languages.perl, 'perl');
-	}, { tab: '    ', spellcheck: false, addClosing: false });
-
-	function sync() {
-		area.value = jar.toString();
-		var count = (area.value || '').split('\n').length;
-		var nums = [];
-		for (var i = 1; i <= count; i++) nums.push(i);
-		gutter.textContent = nums.join('\n');
-	}
-	jar.onUpdate(sync);
-	jar.updateCode(area.value || '');
-	sync();
-	var form = area.form || area.closest('form');
-	if (form) form.addEventListener('submit', sync);
-	editor.addEventListener('input', sync);
-	editor.addEventListener('blur', sync);
-	editor.addEventListener('scroll', function () {
-		gutter.scrollTop = editor.scrollTop;
-	});
 })();
 </script>
+[% END %]
 [% PROCESS settings/footer.html %]
